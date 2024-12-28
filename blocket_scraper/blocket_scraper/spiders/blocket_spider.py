@@ -1,16 +1,62 @@
 import scrapy
 from blocket_scraper.items import BlocketScraperItem
+import urllib.parse
 
 class BlocketSpider(scrapy.Spider):
     name = 'blocket'
     allowed_domains = ['api.blocket.se']
-    start_urls = [
-        'https://api.blocket.se/motor-search-service/v4/search/car?filter=%7B%22key%22%3A%22region%22%2C%22values%22%3A%5B%22G%C3%B6teborg%22%5D%7D&filter=%7B%22key%22%3A%22price%22%2C%22range%22%3A%7B%22start%22%3A%2210000%22%2C%22end%22%3A%22%22%7D%7D&sortOrder=Billigast&page=1'
+
+    drivetrains = [
+        "Fyrhjulsdriven", 
+        "Tvåhjulsdriven"
     ]
+    chassis = [
+        "SUV", 
+        "Kombi", 
+        "Halvkombi", 
+        "Yrkesfordon", 
+        "Sedan", 
+        "Coupé", 
+        "Familjebuss", 
+        "Cab"
+    ]
+    colors = [
+        "Blå",
+        "Brun",
+        "Grå",
+        "Grön",
+        "Gul",
+        "Röd",
+        "Svart",
+        "Vit"
+    ]
+    ownership_type = "Köpa"
+
+    def start_requests(self):
+        # Iterate through all combinations of drivetrain, chassis, and color
+        for drivetrain in self.drivetrains:
+            for chassi in self.chassis:
+                for color in self.colors:
+                    url = (
+                        f'https://api.blocket.se/motor-search-service/v4/search/car?'
+                        f'filter={urllib.parse.quote(f"{{\"key\":\"drivetrain\",\"values\":[\"{drivetrain}\"]}}")}&'
+                        f'filter={urllib.parse.quote(f"{{\"key\":\"chassi\",\"values\":[\"{chassi}\"]}}")}&'
+                        f'filter={urllib.parse.quote(f"{{\"key\":\"color\",\"values\":[\"{color}\"]}}")}&'
+                        f'filter={urllib.parse.quote(f"{{\"key\":\"ownershipType\",\"values\":[\"{self.ownership_type}\"]}}")}&page=1'
+                    )
+                    yield scrapy.Request(
+                        url,
+                        callback=self.parse,
+                        meta={'drivetrain': drivetrain, 'chassi': chassi, 'color': color, 'ownership_type': self.ownership_type}
+                    )
 
     def parse(self, response):
         # Covert json response into python dictionary
         data = response.json()
+
+        drivetrain = response.meta['drivetrain']
+        chassi = response.meta['chassi']
+        color = response.meta['color']
 
         for car in data.get('cars', []):
             item = BlocketScraperItem()
@@ -20,9 +66,13 @@ class BlocketSpider(scrapy.Spider):
             item['originalListTime'] = car.get('originalListTime')
             item['seller_name'] = car.get('seller', {}).get('name')
             item['seller_type'] = car.get('seller', {}).get('type')
+            item['drivetrain'] = drivetrain  # Add drivetrain to item
+            item['chassi'] = chassi  # Add chassi to item
+            item['color'] = color  # Add color to item
             item['heading'] = car.get('heading')
             item['price_amount'] = car.get('price', {}).get('amount')
             item['price_billing_period'] = car.get('price', {}).get('billingPeriod')
+            item['ownership_type'] = response.meta['ownership_type']
             item['thumbnail'] = car.get('thumbnail')
             item['region'] = car.get('car', {}).get('location', {}).get('region')
             item['municipality'] = car.get('car', {}).get('location', {}).get('municipality')
@@ -35,15 +85,15 @@ class BlocketSpider(scrapy.Spider):
             item['description'] = car.get('description')
             item['images'] = [image['image'] for image in (car.get('car', {}).get('images') or []) if isinstance(image, dict) and 'image' in image]
 
-
             yield item
 
         # Handle pagination
-        current_page = response.url.split("page=")[-1]
-        total_pages = data.get('pages', 1)
+        current_page = int(response.url.split("page=")[-1])
+        # total_pages = data.get('pages', 1)
+        total_pages = 1
 
         # If there are more pages, send a new request for the next page
-        if int(current_page) < total_pages:
-            next_page = int(current_page) + 1
-            next_page_url = f'https://api.blocket.se/motor-search-service/v4/search/car?filter=%7B%22key%22%3A%22region%22%2C%22values%22%3A%5B%22G%C3%B6teborg%22%5D%7D&filter=%7B%22key%22%3A%22price%22%2C%22range%22%3A%7B%22start%22%3A%2210000%22%2C%22end%22%3A%22%22%7D%7D&sortOrder=Billigast&page={next_page}'
+        if current_page < total_pages:
+            next_page = current_page + 1
+            next_page_url = response.url.split("&page=")[0] + f"&page={next_page}"
             yield scrapy.Request(next_page_url, callback=self.parse)
